@@ -1,6 +1,6 @@
 # Cloudflare × Payload CMS Starter Kit
 
-An edge-native starter kit that pairs [Payload CMS](https://payloadcms.com) with [Next.js 16](https://nextjs.org) and runs entirely on the Cloudflare Developer Platform — [Workers](https://developers.cloudflare.com/workers/), [D1](https://developers.cloudflare.com/d1/), and [R2](https://developers.cloudflare.com/r2/). Fully typed end-to-end, with a preinstalled [shadcn/ui](https://ui.shadcn.com) component library and a working admin panel out of the box.
+An edge-native starter kit that pairs [Payload CMS](https://payloadcms.com) with [Next.js 16](https://nextjs.org) and runs entirely on the Cloudflare Developer Platform — [Workers](https://developers.cloudflare.com/workers/), [D1](https://developers.cloudflare.com/d1/), [R2](https://developers.cloudflare.com/r2/), [Queues](https://developers.cloudflare.com/queues/), and [Email](https://developers.cloudflare.com/email-routing/email-workers/send-email-workers/). Fully typed end-to-end, with a preinstalled [shadcn/ui](https://ui.shadcn.com) component library, background jobs, transactional email, and a working admin panel out of the box.
 
 ## Features
 
@@ -9,21 +9,25 @@ An edge-native starter kit that pairs [Payload CMS](https://payloadcms.com) with
 - **Cloudflare D1** — serverless SQLite at the edge, wired up through Payload's D1 adapter and Drizzle ORM with file-based migrations.
 - **Cloudflare R2** — media uploads stored on object storage with zero egress fees.
 - **Cloudflare Images** — built-in image optimization through the Workers `IMAGES` binding.
+- **Cloudflare Queues** — Payload's [jobs queue](https://payloadcms.com/docs/jobs-queue/overview) wired to a Cloudflare Queue, so background tasks run durably with delays, retries, and scheduling.
+- **Transactional email** — send React-rendered emails through the Workers `EMAIL` binding via [`payload-email-cloudflare`](https://www.npmjs.com/package/payload-email-cloudflare) and [React Email](https://react.email).
 - **shadcn/ui + Tailwind CSS v4** — a full, themed component library ready to compose.
 - **Type-safe** — types flow from your Payload collections straight into the UI; Cloudflare bindings are typed via `wrangler types`.
 
 ## Tech stack
 
-| Layer            | Technology                                                        |
-| ---------------- | ----------------------------------------------------------------- |
-| Framework        | Next.js 16 (App Router, RSC)                                      |
-| CMS              | Payload CMS 3.85                                                  |
-| Runtime / Deploy | Cloudflare Workers via `@opennextjs/cloudflare`                   |
-| Database         | Cloudflare D1 (SQLite) + `@payloadcms/db-d1-sqlite` + Drizzle ORM |
-| File storage     | Cloudflare R2 via `@payloadcms/storage-r2`                        |
-| Editor           | Lexical (`@payloadcms/richtext-lexical`)                          |
-| UI               | shadcn/ui, Base UI, Radix, Tailwind CSS v4                        |
-| Language / Tools | TypeScript, ESLint, pnpm                                          |
+| Layer            | Technology                                                                   |
+| ---------------- | ---------------------------------------------------------------------------- |
+| Framework        | Next.js 16 (App Router, RSC)                                                 |
+| CMS              | Payload CMS 3.85                                                             |
+| Runtime / Deploy | Cloudflare Workers via `@opennextjs/cloudflare`                              |
+| Database         | Cloudflare D1 (SQLite) + `@payloadcms/db-d1-sqlite` + Drizzle ORM            |
+| File storage     | Cloudflare R2 via `@payloadcms/storage-r2`                                   |
+| Background jobs  | Cloudflare Queues + Payload jobs queue                                       |
+| Email            | Cloudflare Email (`send_email`) via `payload-email-cloudflare` + React Email |
+| Editor           | Lexical (`@payloadcms/richtext-lexical`)                                     |
+| UI               | shadcn/ui, Base UI, Radix, Tailwind CSS v4                                   |
+| Language / Tools | TypeScript, ESLint, pnpm                                                     |
 
 ## Prerequisites
 
@@ -47,7 +51,7 @@ Create a `.env` file in the project root:
 # Used to sign/secure Payload — generate a long random string
 PAYLOAD_SECRET=your-long-random-secret
 
-# Required only for remote D1 migrations via Drizzle Kit (migrate:create)
+# Required only for remote D1 migrations via Drizzle Kit (drizzle-kit migrate)
 CLOUDFLARE_ACCOUNT_ID=your-account-id
 CLOUDFLARE_DATABASE_ID=your-d1-database-id
 CLOUDFLARE_D1_TOKEN=your-d1-api-token
@@ -59,7 +63,7 @@ CLOUDFLARE_D1_TOKEN=your-d1-api-token
 
 ### 3. Provision Cloudflare resources
 
-Create a D1 database and an R2 bucket, then update [`wrangler.jsonc`](wrangler.jsonc) with the real names/IDs (the repo ships with `db-name`, `db-id`, and `bucket-name` placeholders):
+Create a D1 database, an R2 bucket, and a Queue, then update [`wrangler.jsonc`](wrangler.jsonc) with the real names/IDs (the repo ships with `db-name`, `db-id`, and `bucket-name` placeholders):
 
 ```bash
 # Create a D1 database
@@ -67,6 +71,9 @@ npx wrangler d1 create my-database
 
 # Create an R2 bucket
 npx wrangler r2 bucket create my-bucket
+
+# Create the jobs queue (the name must match wrangler.jsonc)
+npx wrangler queues create payload-jobs-queue
 ```
 
 Then edit [`wrangler.jsonc`](wrangler.jsonc):
@@ -79,6 +86,8 @@ Then edit [`wrangler.jsonc`](wrangler.jsonc):
     { "binding": "R2", "bucket_name": "my-bucket" }
 ]
 ```
+
+The Queue (`QUEUE` producer + `payload-jobs-queue` consumer) and the `EMAIL` `send_email` binding are preconfigured in [`wrangler.jsonc`](wrangler.jsonc) — see [Background jobs](#background-jobs) and [Email](#email) below.
 
 If you rename the database, also update the `db-name` references in the `migrate:local` / `migrate:deploy` scripts in [`package.json`](package.json).
 
@@ -104,13 +113,15 @@ The first time you open the admin panel, you'll be prompted to create your first
 
 The Worker is configured with the following Cloudflare bindings (see [`wrangler.jsonc`](wrangler.jsonc)):
 
-| Binding                 | Type          | Purpose                                         |
-| ----------------------- | ------------- | ----------------------------------------------- |
-| `D1`                    | D1 Database   | Payload's primary datastore                     |
-| `R2`                    | R2 Bucket     | Media / file uploads                            |
-| `ASSETS`                | Static Assets | Serves the built Next.js static output          |
-| `IMAGES`                | Images        | On-the-fly image optimization                   |
-| `WORKER_SELF_REFERENCE` | Service       | Self-reference used by OpenNext for ISR/caching |
+| Binding                 | Type          | Purpose                                                      |
+| ----------------------- | ------------- | ------------------------------------------------------------ |
+| `D1`                    | D1 Database   | Payload's primary datastore                                  |
+| `R2`                    | R2 Bucket     | Media / file uploads                                         |
+| `QUEUE`                 | Queue         | Dispatches Payload background jobs                           |
+| `EMAIL`                 | Send Email    | Outbound transactional email                                 |
+| `ASSETS`                | Static Assets | Serves the built Next.js static output                       |
+| `IMAGES`                | Images        | On-the-fly image optimization                                |
+| `WORKER_SELF_REFERENCE` | Service       | Self-reference used by OpenNext for ISR/caching and job runs |
 
 ## Database & migrations
 
@@ -139,6 +150,31 @@ pnpm cf-typegen   # Cloudflare binding types -> cloudflare-env.d.ts
 ```
 
 Run these after changing collections or `wrangler.jsonc` bindings to keep types in sync.
+
+## Background jobs
+
+Payload's [jobs queue](https://payloadcms.com/docs/jobs-queue/overview) is wired to a Cloudflare Queue so tasks run durably, off the request path. The flow:
+
+1. Define tasks in [`src/tasks/index.ts`](src/tasks/index.ts) and enqueue them with `payload.jobs.queue(...)`.
+2. An `afterChange` hook on Payload's `payload-jobs` collection ([`src/lib/queue.ts`](src/lib/queue.ts)) pushes each new job's id onto the `QUEUE` producer. A `waitUntil` timestamp becomes a Queue `delaySeconds` (clamped to Cloudflare's 12-hour max) for scheduled jobs.
+3. The Worker's queue consumer ([`src/worker.ts`](src/worker.ts) → `handlerQueue`) receives the message and calls `/api/payload-jobs/run` for that single job through the `WORKER_SELF_REFERENCE` binding. Successful runs are acked; failures `retry()` after a delay (up to `max_retries`).
+4. Job-run requests are authorized by a shared `X-Payload-Secret` header, checked in [`src/access/jobs.ts`](src/access/jobs.ts) against `PAYLOAD_SECRET`.
+
+Queue settings (batch size, timeout, retries) live in the `queues` block of [`wrangler.jsonc`](wrangler.jsonc). To run jobs you'll need the `payload-jobs-queue` Queue created (see [Provision Cloudflare resources](#3-provision-cloudflare-resources)).
+
+## Email
+
+Transactional email is sent through the Cloudflare `EMAIL` (`send_email`) binding via [`payload-email-cloudflare`](https://www.npmjs.com/package/payload-email-cloudflare), configured as Payload's `email` adapter in [`src/payload.config.ts`](src/payload.config.ts). Update `defaultFromAddress` / `defaultFromName` there for your app.
+
+Templates are authored as [React Email](https://react.email) components in [`src/emails/`](src/emails/) ([`welcome.tsx`](src/emails/welcome.tsx) is included as a starting point). Render a template to HTML and pass it to `payload.sendEmail(...)`.
+
+Preview templates locally with a live-reloading server:
+
+```bash
+pnpm email:dev   # http://localhost:3001
+```
+
+> **Note:** Cloudflare's `send_email` binding requires a verified sender / Email Routing to be configured for your domain in the Cloudflare dashboard before mail is delivered in production.
 
 ## Deployment
 
@@ -173,15 +209,20 @@ src/
 │   └── (payload)/          # Payload admin panel + REST/GraphQL routes
 │       ├── admin/          # /admin dashboard (auto-generated)
 │       └── api/            # /api, /api/graphql, /api/graphql-playground
+├── access/                 # Payload access-control functions (collections, jobs)
 ├── collections/            # Payload collections (Users, Media)
 ├── components/ui/          # shadcn/ui components
 ├── db/                     # Drizzle schema + D1 client helper
+├── emails/                 # React Email templates (welcome.tsx)
 ├── hooks/                  # React hooks
+├── lib/
+│   └── queue.ts            # Queue producer hook + Worker queue consumer
+├── tasks/                  # Payload job task definitions
 ├── utils/
 │   ├── cn.ts               # Tailwind class merge helper
 │   └── context.ts          # Cloudflare context + production logger
 ├── payload.config.ts       # Payload configuration
-└── worker.ts               # Cloudflare Worker entry (re-exports OpenNext handler)
+└── worker.ts               # Cloudflare Worker entry (fetch handler + queue consumer)
 
 migrations/                 # D1 SQL migrations
 stubs/                      # Build-time-only module stubs for the Workers bundle
@@ -197,12 +238,14 @@ drizzle.config.ts           # Drizzle Kit config for D1 migrations
 | `@/*`             | `./src/*`                 |
 | `@payload-config` | `./src/payload.config.ts` |
 | `@context`        | `./src/utils/context.ts`  |
+| `@handler`        | `./.open-next/worker.js`  |
 
 ## Scripts
 
 | Script                 | Description                                            |
 | ---------------------- | ------------------------------------------------------ |
 | `pnpm dev`             | Start the Next.js dev server                           |
+| `pnpm email:dev`       | Preview React Email templates at http://localhost:3001 |
 | `pnpm build`           | Build the Next.js app                                  |
 | `pnpm preview`         | Build with OpenNext and preview in the Workers runtime |
 | `pnpm deploy`          | Build with OpenNext and deploy to Cloudflare Workers   |
@@ -228,4 +271,7 @@ drizzle.config.ts           # Drizzle Kit config for D1 migrations
 - [Cloudflare Workers](https://developers.cloudflare.com/workers/)
 - [Cloudflare D1](https://developers.cloudflare.com/d1/)
 - [Cloudflare R2](https://developers.cloudflare.com/r2/)
+- [Cloudflare Queues](https://developers.cloudflare.com/queues/)
+- [Payload Jobs Queue](https://payloadcms.com/docs/jobs-queue/overview)
+- [React Email](https://react.email)
 - [Next.js docs](https://nextjs.org/docs)
