@@ -1,12 +1,16 @@
 import { cloudflare } from "@context";
 import type { CollectionAfterChangeHook, CollectionConfig, Job } from "payload";
 
+// Cloudflare Queues cap the delivery delay at 12 hours.
+const MAX_QUEUE_DELAY_SECONDS = 43200;
+// How long to wait before redelivering a job whose run failed.
+const RETRY_DELAY_SECONDS = 60;
+
 /**
  * Producer: runs whenever a row is written to the `payload-jobs` collection
  * (i.e. when `payload.jobs.queue()` enqueues a job). On `create` it pushes the
  * new job's id onto the Cloudflare Queue so `handlerQueue` below can pick it up
  * and trigger `/api/payload-jobs/run` for that single job.
- *
  */
 const enqueueJob: CollectionAfterChangeHook<Job> = async ({
     doc,
@@ -24,20 +28,7 @@ const enqueueJob: CollectionAfterChangeHook<Job> = async ({
     }
 
     try {
-        // Honor scheduled jobs: Payload stores the run-after time in `waitUntil`.
-        // Cloudflare Queues cap delivery delay at 12h (43200s).
-        const runAt = doc.waitUntil ? new Date(doc.waitUntil).getTime() : 0;
-        const delaySeconds = runAt
-            ? Math.min(
-                  Math.max(0, Math.round((runAt - Date.now()) / 1000)),
-                  43200,
-              )
-            : undefined;
-
-        await queue.send(
-            { jobId: doc.id },
-            delaySeconds ? { delaySeconds } : undefined,
-        );
+        await queue.send({ jobId: doc.id }, sendOptionsFor(doc.waitUntil));
     } catch (error) {
         // Don't fail job creation if dispatch fails — the row persists and can
         // be retried by a fallback runner. Just surface the error.
@@ -48,6 +39,25 @@ const enqueueJob: CollectionAfterChangeHook<Job> = async ({
     }
 
     return doc;
+};
+
+/**
+ * Translates a Payload `waitUntil` timestamp into Cloudflare Queue send
+ * options. Scheduled jobs are delayed until their run time (clamped to the 12h
+ * max); jobs without a `waitUntil`, or whose time has already passed, run
+ * immediately (no options).
+ */
+const sendOptionsFor = (
+    waitUntil: string | number | Date | null | undefined,
+) => {
+    if (!waitUntil) return undefined;
+
+    const secondsUntilRun = Math.round(
+        (new Date(waitUntil).getTime() - Date.now()) / 1000,
+    );
+    if (secondsUntilRun <= 0) return undefined;
+
+    return { delaySeconds: Math.min(secondsUntilRun, MAX_QUEUE_DELAY_SECONDS) };
 };
 
 /**
@@ -75,6 +85,51 @@ type HandlerQueue = ExportedHandler<
     { jobId?: string | number }
 >["queue"];
 
+type JobMessage = Parameters<NonNullable<HandlerQueue>>[0]["messages"][number];
+type WorkerBinding = NonNullable<CloudflareEnv["WORKER_SELF_REFERENCE"]>;
+
+/**
+ * Consumer: triggers a single Payload job run via the self-reference binding.
+ * Acks on success, retries (after a delay) only on failure, and acks-and-skips
+ * messages that carry no usable jobId.
+ */
+const runJobMessage = async (message: JobMessage, worker: WorkerBinding) => {
+    const { jobId } = message.body;
+    if (!jobId) {
+        console.warn(
+            `Message ${message.id} does not contain a valid jobId. Skipping.`,
+        );
+        message.ack();
+        return;
+    }
+
+    try {
+        const url = `https://worker/api/payload-jobs/run?limit=1&where[id][equals]=${encodeURIComponent(
+            String(jobId),
+        )}`;
+        const response = await worker.fetch(url, {
+            method: "GET",
+            headers: {
+                "X-Payload-Secret": process.env.PAYLOAD_SECRET || "",
+                "X-Queue-Message-Id": message.id,
+                "X-Job-Id": String(jobId),
+            },
+        });
+
+        if (!response.ok) {
+            throw new Error(
+                `Job run failed with status ${response.status}: ${await response.text()}`,
+            );
+        }
+
+        message.ack();
+    } catch (error) {
+        console.error(`Error processing message ${message.id}:`, error);
+        // Redeliver only on failure — successful messages are already acked.
+        message.retry({ delaySeconds: RETRY_DELAY_SECONDS });
+    }
+};
+
 export const handlerQueue: HandlerQueue = async (event, env) => {
     if (!env.WORKER_SELF_REFERENCE) {
         console.warn(
@@ -83,57 +138,14 @@ export const handlerQueue: HandlerQueue = async (event, env) => {
         return;
     }
 
-    switch (event.queue) {
-        case "payload-jobs-queue":
-            for await (const message of event.messages) {
-                try {
-                    const jobId = message.body.jobId
-                        ? encodeURIComponent(String(message.body.jobId))
-                        : undefined;
-                    if (!jobId) {
-                        console.warn(
-                            `Message ${message.id} does not contain a valid jobId. Skipping.`,
-                        );
-                        message.ack();
-                        continue;
-                    }
-
-                    const response = await env.WORKER_SELF_REFERENCE.fetch(
-                        `https://worker/api/payload-jobs/run?limit=1&where[id][equals]=${jobId}`,
-                        {
-                            method: "GET",
-                            headers: {
-                                "X-Payload-Secret":
-                                    process.env.PAYLOAD_SECRET || "",
-                                "X-Queue-Message-Id": message.id,
-                                "X-Job-Id": String(jobId),
-                            },
-                        },
-                    );
-
-                    if (!response.ok) {
-                        const body = await response.text();
-                        throw new Error(
-                            `Job run failed with status ${response.status}: ${body}`,
-                        );
-                    }
-
-                    message.ack();
-                } catch (error) {
-                    console.error(
-                        `Error processing message ${message.id}:`,
-                        error,
-                    );
-                } finally {
-                    message.retry({ delaySeconds: 60 });
-                }
-            }
-            break;
-
-        default:
-            console.warn(
-                `Received message for unexpected queue ${event.queue}. Skipping.`,
-            );
-            return;
+    if (event.queue == "payload-jobs-queue") {
+        for (const message of event.messages) {
+            await runJobMessage(message, env.WORKER_SELF_REFERENCE);
+        }
+        return;
     }
+
+    console.warn(
+        `Received message for unexpected queue ${event.queue}. Skipping.`,
+    );
 };
