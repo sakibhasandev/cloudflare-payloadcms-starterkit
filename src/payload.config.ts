@@ -1,4 +1,5 @@
 import { canRunJobs } from "@/access/jobs";
+import { jobsCollectionOverrides } from "@/lib/queue";
 import { tasks } from "@/tasks";
 import { cloudflare, cloudflareLogger, isProduction } from "@context";
 import { sqliteD1Adapter } from "@payloadcms/db-d1-sqlite";
@@ -26,6 +27,7 @@ export default buildConfig({
         access: {
             run: canRunJobs,
         },
+        jobsCollectionOverrides,
     },
     collections: [Users, Media],
     editor: lexicalEditor(),

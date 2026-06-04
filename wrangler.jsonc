@@ -52,7 +52,23 @@
             "binding": "R2",
             "bucket_name": "bucket-name",
         }
-    ]
+    ],
+    "queues": {
+        "producers": [
+            {
+                "binding": "QUEUE",
+                "queue": "payload-jobs-queue"
+            }
+        ],
+        "consumers": [
+            {
+                "queue": "payload-jobs-queue",
+                "max_batch_size": 10,
+                "max_batch_timeout": 5,
+                "max_retries": 3
+            }
+        ]
+    },
     /**
 	 * Environment Variables
 	 * https://developers.cloudflare.com/workers/wrangler/configuration/#environment-variables
