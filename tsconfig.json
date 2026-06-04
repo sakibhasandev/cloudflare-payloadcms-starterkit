@@ -31,6 +31,9 @@
             ],
             "@context": [
                 "./src/utils/context.ts"
+            ],
+            "@handler": [
+                "./.open-next/worker.js"
             ]
         },
         "types": [

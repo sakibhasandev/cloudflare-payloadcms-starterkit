@@ -1,7 +1,6 @@
-// @ts-ignore Ignore missing build output from OpenNext.js
-
 import { handlerQueue } from "@/lib/queue";
-import { default as handler } from "../.open-next/worker";
+// @ts-ignore Ignore missing build output from OpenNext.js
+import { default as handler } from "@handler";
 
 export default {
     fetch: handler.fetch,
