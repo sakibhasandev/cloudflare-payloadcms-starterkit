@@ -1,3 +1,5 @@
+import { canRunJobs } from "@/access/jobs";
+import { tasks } from "@/tasks";
 import { cloudflare, cloudflareLogger, isProduction } from "@context";
 import { sqliteD1Adapter } from "@payloadcms/db-d1-sqlite";
 import { lexicalEditor } from "@payloadcms/richtext-lexical";
@@ -17,6 +19,12 @@ export default buildConfig({
         user: Users.slug,
         importMap: {
             baseDir: path.resolve(dirname),
+        },
+    },
+    jobs: {
+        tasks,
+        access: {
+            run: canRunJobs,
         },
     },
     collections: [Users, Media],
