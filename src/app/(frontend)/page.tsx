@@ -77,21 +77,14 @@ export default async function Home() {
                         deployable in minutes.
                     </p>
                     <div className="flex flex-col items-center gap-3 sm:flex-row">
-                        <Button
-                            size="lg"
-                            asChild
-                        >
+                        <Button size="lg" asChild>
                             <a href="/admin">
                                 <LayoutDashboard data-icon="inline-start" />
                                 Open admin panel
                                 <ArrowRight data-icon="inline-end" />
                             </a>
                         </Button>
-                        <Button
-                            size="lg"
-                            variant="outline"
-                            asChild
-                        >
+                        <Button size="lg" variant="outline" asChild>
                             <a
                                 href="https://payloadcms.com/docs"
                                 target="_blank"
@@ -130,11 +123,7 @@ export default async function Home() {
                         to get started.
                     </p>
                     <div className="flex items-center gap-1">
-                        <Button
-                            variant="link"
-                            size="sm"
-                            asChild
-                        >
+                        <Button variant="link" size="sm" asChild>
                             <a
                                 href="https://nextjs.org/docs"
                                 target="_blank"
@@ -143,11 +132,7 @@ export default async function Home() {
                                 Next.js
                             </a>
                         </Button>
-                        <Button
-                            variant="link"
-                            size="sm"
-                            asChild
-                        >
+                        <Button variant="link" size="sm" asChild>
                             <a
                                 href="https://developers.cloudflare.com"
                                 target="_blank"

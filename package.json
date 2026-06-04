@@ -16,7 +16,8 @@
         "generate:schema": "payload generate:db-schema",
         "migrate:create": "drizzle-kit generate",
         "migrate:local": "wrangler d1 migrations apply db-name --local",
-        "migrate:deploy": "wrangler d1 migrations apply db-name --remote"
+        "migrate:deploy": "wrangler d1 migrations apply db-name --remote",
+        "email:dev": "email dev --dir src/emails --port 3001"
     },
     "dependencies": {
         "@base-ui/react": "^1.5.0",
@@ -40,6 +41,7 @@
         "react": "^19.1.7",
         "react-day-picker": "^10.0.1",
         "react-dom": "^19.1.7",
+        "react-email": "^6.5.0",
         "react-resizable-panels": "^4.11.2",
         "recharts": "3.8.0",
         "shadcn": "^4.10.0",
@@ -50,6 +52,7 @@
     },
     "devDependencies": {
         "@eslint/eslintrc": "^3",
+        "@react-email/ui": "6.5.0",
         "@tailwindcss/postcss": "^4",
         "@types/node": "^20",
         "@types/react": "^19.1.7",
@@ -65,7 +68,7 @@
     },
     "pnpm": {
         "overrides": {
-            "esbuild": "^0.25.10"
+            "esbuild": "^0.28.0"
         }
     }
 }
