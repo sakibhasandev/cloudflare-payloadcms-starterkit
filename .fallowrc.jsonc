@@ -22,6 +22,7 @@
     // "next/typescript") in eslint.config.mjs — a FlatCompat string, not a static
     // import — so fallow can't see the usage and flags it as unused. It's live.
     "ignoreDependencies": [
-        "eslint-config-next"
+        "eslint-config-next",
+        "@react-email/ui"
     ]
 }

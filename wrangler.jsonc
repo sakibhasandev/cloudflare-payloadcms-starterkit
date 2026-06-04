@@ -69,6 +69,11 @@
             }
         ]
     },
+    "send_email": [
+        {
+            "name": "EMAIL"
+        }
+    ]
     /**
 	 * Environment Variables
 	 * https://developers.cloudflare.com/workers/wrangler/configuration/#environment-variables

@@ -83,43 +83,57 @@ export const handlerQueue: HandlerQueue = async (event, env) => {
         return;
     }
 
-    for await (const message of event.messages) {
-        try {
-            const jobId = message.body.jobId
-                ? encodeURIComponent(String(message.body.jobId))
-                : undefined;
-            if (!jobId) {
-                console.warn(
-                    `Message ${message.id} does not contain a valid jobId. Skipping.`,
-                );
-                message.ack();
-                continue;
-            }
+    switch (event.queue) {
+        case "payload-jobs-queue":
+            for await (const message of event.messages) {
+                try {
+                    const jobId = message.body.jobId
+                        ? encodeURIComponent(String(message.body.jobId))
+                        : undefined;
+                    if (!jobId) {
+                        console.warn(
+                            `Message ${message.id} does not contain a valid jobId. Skipping.`,
+                        );
+                        message.ack();
+                        continue;
+                    }
 
-            const response = await env.WORKER_SELF_REFERENCE.fetch(
-                `https://worker/api/payload-jobs/run?limit=1&where[id][equals]=${jobId}`,
-                {
-                    method: "GET",
-                    headers: {
-                        "X-Payload-Secret": process.env.PAYLOAD_SECRET || "",
-                        "X-Queue-Message-Id": message.id,
-                        "X-Job-Id": String(jobId),
-                    },
-                },
+                    const response = await env.WORKER_SELF_REFERENCE.fetch(
+                        `https://worker/api/payload-jobs/run?limit=1&where[id][equals]=${jobId}`,
+                        {
+                            method: "GET",
+                            headers: {
+                                "X-Payload-Secret":
+                                    process.env.PAYLOAD_SECRET || "",
+                                "X-Queue-Message-Id": message.id,
+                                "X-Job-Id": String(jobId),
+                            },
+                        },
+                    );
+
+                    if (!response.ok) {
+                        const body = await response.text();
+                        throw new Error(
+                            `Job run failed with status ${response.status}: ${body}`,
+                        );
+                    }
+
+                    message.ack();
+                } catch (error) {
+                    console.error(
+                        `Error processing message ${message.id}:`,
+                        error,
+                    );
+                } finally {
+                    message.retry({ delaySeconds: 60 });
+                }
+            }
+            break;
+
+        default:
+            console.warn(
+                `Received message for unexpected queue ${event.queue}. Skipping.`,
             );
-
-            if (!response.ok) {
-                const body = await response.text();
-                throw new Error(
-                    `Job run failed with status ${response.status}: ${body}`,
-                );
-            }
-
-            message.ack();
-        } catch (error) {
-            console.error(`Error processing message ${message.id}:`, error);
-        } finally {
-            message.retry({ delaySeconds: 60 });
-        }
+            return;
     }
 };

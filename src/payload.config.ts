@@ -7,6 +7,7 @@ import { lexicalEditor } from "@payloadcms/richtext-lexical";
 import { r2Storage } from "@payloadcms/storage-r2";
 import path from "path";
 import { buildConfig } from "payload";
+import { cloudflareAdapter } from "payload-email-cloudflare";
 import { fileURLToPath } from "url";
 
 import { Media } from "./collections/media";
@@ -36,6 +37,11 @@ export default buildConfig({
         outputFile: path.resolve(dirname, "../payload-types.d.ts"),
     },
     logger: isProduction ? cloudflareLogger : undefined,
+    email: cloudflareAdapter({
+        binding: cloudflare.env.EMAIL,
+        defaultFromAddress: "noreply@example.com",
+        defaultFromName: "Example App",
+    }),
     db: sqliteD1Adapter({
         idType: "number",
         blocksAsJSON: true,
