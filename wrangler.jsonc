@@ -73,7 +73,20 @@
         {
             "name": "EMAIL"
         }
-    ]
+    ],
+    /**
+	 * Cron Triggers
+	 * Fires the Worker's `scheduled` handler, which evaluates Payload task /
+	 * workflow `schedule` configs and queues any due jobs. The interval here is
+	 * the *resolution* of scheduling — a task asking to run every minute can only
+	 * fire as often as this trigger does.
+	 * https://developers.cloudflare.com/workers/configuration/cron-triggers/
+	 */
+    "triggers": {
+        "crons": [
+            "*/5 * * * *"
+        ]
+    }
     /**
 	 * Environment Variables
 	 * https://developers.cloudflare.com/workers/wrangler/configuration/#environment-variables

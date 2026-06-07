@@ -29,6 +29,7 @@ export default buildConfig({
             run: canRunJobs,
         },
         jobsCollectionOverrides,
+        runHooks: true,
     },
     collections: [Users, Media],
     editor: lexicalEditor(),

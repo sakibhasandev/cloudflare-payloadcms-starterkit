@@ -109,6 +109,74 @@ export const payload_kv = sqliteTable(
   (columns) => [uniqueIndex("payload_kv_key_idx").on(columns.key)],
 );
 
+export const payload_jobs_log = sqliteTable(
+  "payload_jobs_log",
+  {
+    _order: integer("_order").notNull(),
+    _parentID: integer("_parent_id").notNull(),
+    id: text("id").primaryKey(),
+    executedAt: text("executed_at")
+      .notNull()
+      .default(sql`(strftime('%Y-%m-%dT%H:%M:%fZ', 'now'))`),
+    completedAt: text("completed_at")
+      .notNull()
+      .default(sql`(strftime('%Y-%m-%dT%H:%M:%fZ', 'now'))`),
+    taskSlug: text("task_slug", { enum: ["inline", "heartbeat"] }).notNull(),
+    taskID: text("task_i_d").notNull(),
+    input: text("input", { mode: "json" }),
+    output: text("output", { mode: "json" }),
+    state: text("state", { enum: ["failed", "succeeded"] }).notNull(),
+    error: text("error", { mode: "json" }),
+  },
+  (columns) => [
+    index("payload_jobs_log_order_idx").on(columns._order),
+    index("payload_jobs_log_parent_id_idx").on(columns._parentID),
+    foreignKey({
+      columns: [columns["_parentID"]],
+      foreignColumns: [payload_jobs.id],
+      name: "payload_jobs_log_parent_id_fk",
+    }).onDelete("cascade"),
+  ],
+);
+
+export const payload_jobs = sqliteTable(
+  "payload_jobs",
+  {
+    id: integer("id").primaryKey({ autoIncrement: true }),
+    input: text("input", { mode: "json" }),
+    completedAt: text("completed_at").default(
+      sql`(strftime('%Y-%m-%dT%H:%M:%fZ', 'now'))`,
+    ),
+    totalTried: numeric("total_tried", { mode: "number" }).default(0),
+    hasError: integer("has_error", { mode: "boolean" }).default(false),
+    error: text("error", { mode: "json" }),
+    taskSlug: text("task_slug", { enum: ["inline", "heartbeat"] }),
+    queue: text("queue").default("default"),
+    waitUntil: text("wait_until").default(
+      sql`(strftime('%Y-%m-%dT%H:%M:%fZ', 'now'))`,
+    ),
+    processing: integer("processing", { mode: "boolean" }).default(false),
+    meta: text("meta", { mode: "json" }),
+    updatedAt: text("updated_at")
+      .notNull()
+      .default(sql`(strftime('%Y-%m-%dT%H:%M:%fZ', 'now'))`),
+    createdAt: text("created_at")
+      .notNull()
+      .default(sql`(strftime('%Y-%m-%dT%H:%M:%fZ', 'now'))`),
+  },
+  (columns) => [
+    index("payload_jobs_completed_at_idx").on(columns.completedAt),
+    index("payload_jobs_total_tried_idx").on(columns.totalTried),
+    index("payload_jobs_has_error_idx").on(columns.hasError),
+    index("payload_jobs_task_slug_idx").on(columns.taskSlug),
+    index("payload_jobs_queue_idx").on(columns.queue),
+    index("payload_jobs_wait_until_idx").on(columns.waitUntil),
+    index("payload_jobs_processing_idx").on(columns.processing),
+    index("payload_jobs_updated_at_idx").on(columns.updatedAt),
+    index("payload_jobs_created_at_idx").on(columns.createdAt),
+  ],
+);
+
 export const payload_locked_documents = sqliteTable(
   "payload_locked_documents",
   {
@@ -228,6 +296,17 @@ export const payload_migrations = sqliteTable(
   ],
 );
 
+export const payload_jobs_stats = sqliteTable("payload_jobs_stats", {
+  id: integer("id").primaryKey({ autoIncrement: true }),
+  stats: text("stats", { mode: "json" }),
+  updatedAt: text("updated_at").default(
+    sql`(strftime('%Y-%m-%dT%H:%M:%fZ', 'now'))`,
+  ),
+  createdAt: text("created_at").default(
+    sql`(strftime('%Y-%m-%dT%H:%M:%fZ', 'now'))`,
+  ),
+});
+
 export const relations_users_sessions = relations(
   users_sessions,
   ({ one }) => ({
@@ -245,6 +324,21 @@ export const relations_users = relations(users, ({ many }) => ({
 }));
 export const relations_media = relations(media, () => ({}));
 export const relations_payload_kv = relations(payload_kv, () => ({}));
+export const relations_payload_jobs_log = relations(
+  payload_jobs_log,
+  ({ one }) => ({
+    _parentID: one(payload_jobs, {
+      fields: [payload_jobs_log._parentID],
+      references: [payload_jobs.id],
+      relationName: "log",
+    }),
+  }),
+);
+export const relations_payload_jobs = relations(payload_jobs, ({ many }) => ({
+  log: many(payload_jobs_log, {
+    relationName: "log",
+  }),
+}));
 export const relations_payload_locked_documents_rels = relations(
   payload_locked_documents_rels,
   ({ one }) => ({
@@ -300,26 +394,36 @@ export const relations_payload_migrations = relations(
   payload_migrations,
   () => ({}),
 );
+export const relations_payload_jobs_stats = relations(
+  payload_jobs_stats,
+  () => ({}),
+);
 
 type DatabaseSchema = {
   users_sessions: typeof users_sessions;
   users: typeof users;
   media: typeof media;
   payload_kv: typeof payload_kv;
+  payload_jobs_log: typeof payload_jobs_log;
+  payload_jobs: typeof payload_jobs;
   payload_locked_documents: typeof payload_locked_documents;
   payload_locked_documents_rels: typeof payload_locked_documents_rels;
   payload_preferences: typeof payload_preferences;
   payload_preferences_rels: typeof payload_preferences_rels;
   payload_migrations: typeof payload_migrations;
+  payload_jobs_stats: typeof payload_jobs_stats;
   relations_users_sessions: typeof relations_users_sessions;
   relations_users: typeof relations_users;
   relations_media: typeof relations_media;
   relations_payload_kv: typeof relations_payload_kv;
+  relations_payload_jobs_log: typeof relations_payload_jobs_log;
+  relations_payload_jobs: typeof relations_payload_jobs;
   relations_payload_locked_documents_rels: typeof relations_payload_locked_documents_rels;
   relations_payload_locked_documents: typeof relations_payload_locked_documents;
   relations_payload_preferences_rels: typeof relations_payload_preferences_rels;
   relations_payload_preferences: typeof relations_payload_preferences;
   relations_payload_migrations: typeof relations_payload_migrations;
+  relations_payload_jobs_stats: typeof relations_payload_jobs_stats;
 };
 
 declare module "@payloadcms/db-d1-sqlite" {

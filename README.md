@@ -10,6 +10,7 @@ An edge-native starter kit that pairs [Payload CMS](https://payloadcms.com) with
 - **Cloudflare R2** — media uploads stored on object storage with zero egress fees.
 - **Cloudflare Images** — built-in image optimization through the Workers `IMAGES` binding.
 - **Cloudflare Queues** — Payload's [jobs queue](https://payloadcms.com/docs/jobs-queue/overview) wired to a Cloudflare Queue, so background tasks run durably with delays, retries, and scheduling.
+- **Cron Triggers** — Payload task/workflow `schedule` configs are driven by a [Cloudflare Cron Trigger](https://developers.cloudflare.com/workers/configuration/cron-triggers/), so recurring jobs queue automatically on the edge.
 - **Transactional email** — send React-rendered emails through the Workers `EMAIL` binding via [`payload-email-cloudflare`](https://www.npmjs.com/package/payload-email-cloudflare) and [React Email](https://react.email).
 - **shadcn/ui + Tailwind CSS v4** — a full, themed component library ready to compose.
 - **Type-safe** — types flow from your Payload collections straight into the UI; Cloudflare bindings are typed via `wrangler types`.
@@ -156,11 +157,24 @@ Run these after changing collections or `wrangler.jsonc` bindings to keep types 
 Payload's [jobs queue](https://payloadcms.com/docs/jobs-queue/overview) is wired to a Cloudflare Queue so tasks run durably, off the request path. The flow:
 
 1. Define tasks in [`src/tasks/index.ts`](src/tasks/index.ts) and enqueue them with `payload.jobs.queue(...)`.
-2. An `afterChange` hook on Payload's `payload-jobs` collection ([`src/lib/queue.ts`](src/lib/queue.ts)) pushes each new job's id onto the `QUEUE` producer. A `waitUntil` timestamp becomes a Queue `delaySeconds` (clamped to Cloudflare's 12-hour max) for scheduled jobs.
-3. The Worker's queue consumer ([`src/worker.ts`](src/worker.ts) → `handlerQueue`) receives the message and calls `/api/payload-jobs/run` for that single job through the `WORKER_SELF_REFERENCE` binding. Successful runs are acked; failures `retry()` after a delay (up to `max_retries`).
+2. An `afterChange` hook on Payload's `payload-jobs` collection ([`src/lib/queue.ts`](src/lib/queue.ts)) pushes each new job's id (and its `waitUntil`) onto the `QUEUE` producer. A `waitUntil` timestamp becomes a Queue `delaySeconds` so delayed/scheduled jobs run at the right time. Cloudflare caps `delaySeconds` at 12 hours, so the consumer re-queues a job that arrives before it's due — chaining further delays for waits longer than 12h.
+3. The Worker's queue consumer ([`src/worker.ts`](src/worker.ts) → `handlerQueue`) receives the message and calls `/api/payload-jobs/run` for that single job (across all queues) through the `WORKER_SELF_REFERENCE` binding. Successful runs are acked; failures `retry()` after a delay (up to `max_retries`).
 4. Job-run requests are authorized by a shared `X-Payload-Secret` header, checked in [`src/access/jobs.ts`](src/access/jobs.ts) against `PAYLOAD_SECRET`.
 
 Queue settings (batch size, timeout, retries) live in the `queues` block of [`wrangler.jsonc`](wrangler.jsonc). To run jobs you'll need the `payload-jobs-queue` Queue created (see [Provision Cloudflare resources](#3-provision-cloudflare-resources)).
+
+## Scheduled jobs
+
+Tasks and workflows can declare a `schedule` (a cron) so Payload queues them automatically — no manual `payload.jobs.queue(...)` call. Because Workers have no long-running process to keep a timer alive, the cron tick is driven by a [Cloudflare Cron Trigger](https://developers.cloudflare.com/workers/configuration/cron-triggers/). The flow:
+
+1. Give a task a `schedule` in [`src/tasks/index.ts`](src/tasks/index.ts) (the included `heartbeat` task is an example). `scheduling` then turns on in Payload's jobs config.
+2. The `triggers.crons` entry in [`wrangler.jsonc`](wrangler.jsonc) fires the Worker's `scheduled` handler ([`src/worker.ts`](src/worker.ts) → `handlerScheduled`).
+3. That handler ([`src/lib/cron.ts`](src/lib/cron.ts)) calls Payload's built-in `/api/payload-jobs/handle-schedules?allQueues=true` endpoint through the `WORKER_SELF_REFERENCE` binding. The endpoint runs `payload.jobs.handleSchedules()`, which queues any task whose cron is now due.
+4. Queued jobs flow through the exact same [background-jobs](#background-jobs) path — the `afterChange` hook dispatches them onto the Cloudflare Queue, and the consumer runs them. The cron only _queues_ due jobs; it never runs them inline, so there is one execution path.
+
+The Cron Trigger interval is the **resolution** of scheduling: a task asking to run every minute can fire no more often than the trigger does (the default is every 5 minutes). Authorization reuses the same `X-Payload-Secret` header as job runs.
+
+> **Note:** Cron Triggers only fire in deployed Workers, not under `next dev`. To exercise schedules locally, run `wrangler dev --test-scheduled` and hit `http://localhost:8787/cdn-cgi/handler/scheduled`, or simply `GET /api/payload-jobs/handle-schedules` with the `X-Payload-Secret` header.
 
 ## Email
 

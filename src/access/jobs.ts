@@ -2,8 +2,10 @@ import type { RunJobAccess } from "payload";
 
 /**
  * Authorizes job-run requests by verifying the shared `X-Payload-Secret`
- * header against `PAYLOAD_SECRET`. The queue handler in `./queue.ts` sends
- * this header when triggering jobs via the self-reference binding.
+ * header against `PAYLOAD_SECRET`. The queue handler in `./queue.ts` and the
+ * Cron Trigger handler in `./cron.ts` both send this header when triggering
+ * work via the self-reference binding. Payload also reuses this access function
+ * to guard the built-in `/api/payload-jobs/handle-schedules` endpoint.
  */
 export const canRunJobs: RunJobAccess = ({ req: { headers } }) => {
     const headerSecret = headers.get("X-Payload-Secret");

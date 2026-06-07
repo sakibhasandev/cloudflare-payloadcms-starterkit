@@ -7,6 +7,17 @@ const MAX_QUEUE_DELAY_SECONDS = 43200;
 const RETRY_DELAY_SECONDS = 60;
 
 /**
+ * Body of each message on the jobs queue. `waitUntil` (epoch ms) is carried so
+ * the consumer can detect a job delivered before its run time — because the
+ * delay was clamped to the 12h cap, or due to clock slop — and re-chain another
+ * bounded delay instead of running (and dropping) it.
+ */
+export type JobMessageBody = {
+    jobId?: string | number;
+    waitUntil?: number;
+};
+
+/**
  * Producer: runs whenever a row is written to the `payload-jobs` collection
  * (i.e. when `payload.jobs.queue()` enqueues a job). On `create` it pushes the
  * new job's id onto the Cloudflare Queue so `handlerQueue` below can pick it up
@@ -28,7 +39,10 @@ const enqueueJob: CollectionAfterChangeHook<Job> = async ({
     }
 
     try {
-        await queue.send({ jobId: doc.id }, sendOptionsFor(doc.waitUntil));
+        const waitUntil = doc.waitUntil
+            ? new Date(doc.waitUntil).getTime()
+            : undefined;
+        await queue.send({ jobId: doc.id, waitUntil }, delayUntil(waitUntil));
     } catch (error) {
         // Don't fail job creation if dispatch fails — the row persists and can
         // be retried by a fallback runner. Just surface the error.
@@ -42,19 +56,15 @@ const enqueueJob: CollectionAfterChangeHook<Job> = async ({
 };
 
 /**
- * Translates a Payload `waitUntil` timestamp into Cloudflare Queue send
- * options. Scheduled jobs are delayed until their run time (clamped to the 12h
- * max); jobs without a `waitUntil`, or whose time has already passed, run
- * immediately (no options).
+ * Cloudflare Queue delay options that hold a message until `waitUntilMs` (epoch
+ * ms), clamped to the 12h cap. Returns undefined (deliver immediately) when the
+ * target time is absent or already in the past. Used both to schedule a job's
+ * first delivery and to re-chain delays for waits longer than the 12h cap.
  */
-const sendOptionsFor = (
-    waitUntil: string | number | Date | null | undefined,
-) => {
-    if (!waitUntil) return undefined;
+const delayUntil = (waitUntilMs: number | undefined) => {
+    if (!waitUntilMs) return undefined;
 
-    const secondsUntilRun = Math.round(
-        (new Date(waitUntil).getTime() - Date.now()) / 1000,
-    );
+    const secondsUntilRun = Math.round((waitUntilMs - Date.now()) / 1000);
     if (secondsUntilRun <= 0) return undefined;
 
     return { delaySeconds: Math.min(secondsUntilRun, MAX_QUEUE_DELAY_SECONDS) };
@@ -80,21 +90,23 @@ export const jobsCollectionOverrides = ({
     return defaultJobsCollection;
 };
 
-type HandlerQueue = ExportedHandler<
-    CloudflareEnv,
-    { jobId?: string | number }
->["queue"];
+type HandlerQueue = ExportedHandler<CloudflareEnv, JobMessageBody>["queue"];
 
 type JobMessage = Parameters<NonNullable<HandlerQueue>>[0]["messages"][number];
 type WorkerBinding = NonNullable<CloudflareEnv["WORKER_SELF_REFERENCE"]>;
+type JobQueue = CloudflareEnv["QUEUE"];
 
 /**
  * Consumer: triggers a single Payload job run via the self-reference binding.
  * Acks on success, retries (after a delay) only on failure, and acks-and-skips
  * messages that carry no usable jobId.
  */
-const runJobMessage = async (message: JobMessage, worker: WorkerBinding) => {
-    const { jobId } = message.body;
+const runJobMessage = async (
+    message: JobMessage,
+    worker: WorkerBinding,
+    queue: JobQueue,
+) => {
+    const { jobId, waitUntil } = message.body;
     if (!jobId) {
         console.warn(
             `Message ${message.id} does not contain a valid jobId. Skipping.`,
@@ -103,8 +115,25 @@ const runJobMessage = async (message: JobMessage, worker: WorkerBinding) => {
         return;
     }
 
+    // Not due yet: the 12h delay cap (or clock slop) delivered this early.
+    // Payload's runner only picks up jobs whose `waitUntil` has passed, so
+    // running now would no-op and silently drop the job. Re-enqueue a fresh
+    // message with another bounded delay instead — a new message (rather than
+    // `message.retry()`) resets the delivery-attempt counter, so chaining hops
+    // for waits longer than 12h doesn't exhaust `max_retries`.
+    if (waitUntil && Date.now() < waitUntil) {
+        await queue.send(message.body, delayUntil(waitUntil));
+        message.ack();
+        return;
+    }
+
     try {
-        const url = `https://worker/api/payload-jobs/run?limit=1&where[id][equals]=${encodeURIComponent(
+        // `allQueues=true`: the exact-id filter already targets one job, so this
+        // just lifts the default-queue constraint and lets jobs on any named
+        // Payload queue run. `disableScheduling=true`: schedule evaluation is
+        // owned solely by the Cron Trigger (`./cron.ts`), so per-job runs don't
+        // redundantly re-check it.
+        const url = `https://worker/api/payload-jobs/run?limit=1&allQueues=true&disableScheduling=true&where[id][equals]=${encodeURIComponent(
             String(jobId),
         )}`;
         const response = await worker.fetch(url, {
@@ -140,7 +169,7 @@ export const handlerQueue: HandlerQueue = async (event, env) => {
 
     if (event.queue == "payload-jobs-queue") {
         for (const message of event.messages) {
-            await runJobMessage(message, env.WORKER_SELF_REFERENCE);
+            await runJobMessage(message, env.WORKER_SELF_REFERENCE, env.QUEUE);
         }
         return;
     }
