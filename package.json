@@ -17,7 +17,9 @@
         "migrate:create": "drizzle-kit generate",
         "migrate:local": "wrangler d1 migrations apply db-name --local",
         "migrate:deploy": "wrangler d1 migrations apply db-name --remote",
-        "email:dev": "email dev --dir src/emails --port 3001"
+        "email:dev": "email dev --dir src/emails --port 3001",
+        "test": "vitest run",
+        "test:watch": "vitest"
     },
     "dependencies": {
         "@base-ui/react": "^1.5.0",
@@ -65,6 +67,7 @@
         "tailwindcss": "^4",
         "tsx": "^4.22.4",
         "typescript": "^5.7.4",
+        "vitest": "^3.2.6",
         "wrangler": "^4.97.0"
     },
     "pnpm": {
